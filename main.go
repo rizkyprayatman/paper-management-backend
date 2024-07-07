@@ -5,6 +5,7 @@ import (
 	"paper-management-backend/database"
 	"paper-management-backend/migrations"
 	"paper-management-backend/routes"
+	"paper-management-backend/seeders"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -30,6 +31,7 @@ func main() {
 
 	if !isTableExists(database.DB, "users") {
 		migrations.Migrate()
+		seeders.SeedRoles()
 	}
 
 	// Setup routes
