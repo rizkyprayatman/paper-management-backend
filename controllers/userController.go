@@ -75,8 +75,13 @@ func Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Cannot generate token"})
 	}
 
-	// Kirim respons JSON dengan email, role, dan token JWT
+	// Kirim respons JSON dengan name, email, phone number dan token JWT;
 	return c.JSON(fiber.Map{
 		"token": token,
+		"user": fiber.Map{
+			"name":        user.Name,
+			"email":       user.Email,
+			"phoneNumber": user.PhoneNumber,
+		},
 	})
 }
