@@ -32,10 +32,12 @@ func main() {
 	if !isTableExists(database.DB, "users") {
 		migrations.Migrate()
 		seeders.SeedRoles()
+		seeders.SeedJenisDocument()
 	}
 
 	// Setup routes
 	routes.UserRoutes(app)
+	routes.DocumentRoutes(app)
 
 	// 404 Handler
 	app.Use(func(c *fiber.Ctx) error {

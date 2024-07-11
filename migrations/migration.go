@@ -8,7 +8,7 @@ import (
 
 func Migrate() {
 	err := database.DB.AutoMigrate(&models.Role{},
-		&models.User{})
+		&models.User{}, &models.Document{}, &models.JenisDocument{})
 	if err != nil {
 		log.Fatal("Migration failed", err)
 	}
