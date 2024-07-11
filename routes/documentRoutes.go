@@ -13,6 +13,7 @@ func DocumentRoutes(app *fiber.App) {
 	api.Use(middleware.Authorization)
 
 	api.Get("/jenis-documents", controllers.GetAllJenisDocuments)
+	api.Get("/get-all-documents", controllers.GetAllDocuments)
 	api.Post("/upload-document", controllers.UploadDocument)
 	api.Post("/share-document/:id", controllers.ShareDocument)
 }

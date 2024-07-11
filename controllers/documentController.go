@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"image/png"
 	"io"
+	"math"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"paper-management-backend/database"
@@ -21,6 +23,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/unidoc/unipdf/v3/model"
 	"github.com/unidoc/unipdf/v3/render"
+	"gorm.io/gorm"
 )
 
 func renderPageAsPNG(page *model.PdfPage, outputPath string) error {
@@ -55,6 +58,59 @@ func GetAllJenisDocuments(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to retrieve documents"})
 	}
 	return c.JSON(jenisDocuments)
+}
+
+func GetAllDocuments(c *fiber.Ctx) error {
+	userId := c.Locals("userId").(uuid.UUID)
+
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	perPage, _ := strconv.Atoi(c.Query("perPage", "10"))
+	sort := c.Query("sort", "created_at")
+	order := strings.ToUpper(c.Query("order", "DESC"))
+	search := c.Query("search", "")
+
+	offset := (page - 1) * perPage
+
+	var documents []models.Document
+	query := database.DB.Preload("JenisDocument").Where("user_id = ?", userId)
+
+	if search != "" {
+		query = query.Where("file_name LIKE ? OR location LIKE ?", "%"+search+"%", "%"+search+"%")
+	}
+
+	var total int64
+	if err := query.Model(&models.Document{}).Count(&total).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Failed to count documents",
+			"details": err.Error(),
+		})
+	}
+
+	query = query.Order(gorm.Expr(sort + " " + order))
+
+	if err := query.Limit(perPage).Offset(offset).Find(&documents).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Failed to retrieve documents",
+			"details": err.Error(),
+		})
+	}
+
+	meta := fiber.Map{
+		"page":     page,
+		"perPage":  perPage,
+		"sort":     sort,
+		"order":    order,
+		"search":   search,
+		"total":    total,
+		"lastPage": int(math.Ceil(float64(total) / float64(perPage))),
+	}
+
+	response := fiber.Map{
+		"data": documents,
+		"meta": meta,
+	}
+
+	return c.JSON(response)
 }
 
 func UploadDocument(c *fiber.Ctx) error {
@@ -294,7 +350,7 @@ func ShareDocument(c *fiber.Ctx) error {
 	}
 
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.EndpointResolver = s3.EndpointResolverFromURL("https://c2120c12a2576133e8620d1b94e3e12f.r2.cloudflarestorage.com")
+		o.EndpointResolver = s3.EndpointResolverFromURL(os.Getenv("BASE_URL_R2"))
 	})
 
 	// Generate presigned URL
