@@ -21,7 +21,13 @@ func main() {
 
 	app := fiber.New()
 
-	app.Use(cors.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     "https://paper-management.livetest.my.id, https://www.paper-management.livetest.my.id",
+		AllowMethods:     "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
+		ExposeHeaders:    "Content-Length",
+		AllowCredentials: true,
+	}))
 
 	// Static files
 	app.Static("/", "./static")

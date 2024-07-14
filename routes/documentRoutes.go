@@ -16,4 +16,7 @@ func DocumentRoutes(app *fiber.App) {
 	api.Get("/get-all-documents", controllers.GetAllDocuments)
 	api.Post("/upload-document", controllers.UploadDocument)
 	api.Post("/share-document/:id", controllers.ShareDocument)
+	api.Get("/documents/:id", controllers.GetDocumentByID)
+	api.Get("/download-documents/:id", controllers.DownloadDocument)
+	api.Delete("/delete-document/:id", controllers.DeleteDocument)
 }

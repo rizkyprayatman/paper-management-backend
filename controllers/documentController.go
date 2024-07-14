@@ -23,7 +23,6 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/unidoc/unipdf/v3/model"
 	"github.com/unidoc/unipdf/v3/render"
-	"gorm.io/gorm"
 )
 
 func renderPageAsPNG(page *model.PdfPage, outputPath string) error {
@@ -64,9 +63,9 @@ func GetAllDocuments(c *fiber.Ctx) error {
 	userId := c.Locals("userId").(uuid.UUID)
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("perPage", "10"))
+	perPage, _ := strconv.Atoi(c.Query("perPage", "4"))
 	sort := c.Query("sort", "created_at")
-	order := strings.ToUpper(c.Query("order", "DESC"))
+	order := strings.ToUpper(c.Query("order", "ASC"))
 	search := c.Query("search", "")
 
 	offset := (page - 1) * perPage
@@ -86,7 +85,22 @@ func GetAllDocuments(c *fiber.Ctx) error {
 		})
 	}
 
-	query = query.Order(gorm.Expr(sort + " " + order))
+	// Ensure the sort and order are sanitized and valid
+	allowedSortFields := map[string]bool{
+		"created_at": true,
+		"updated_at": true,
+		"file_name":  true,
+	}
+
+	if !allowedSortFields[sort] {
+		sort = "created_at"
+	}
+
+	if order != "ASC" && order != "DESC" {
+		order = "ASC"
+	}
+
+	query = query.Order(fmt.Sprintf("%s %s", sort, order))
 
 	if err := query.Limit(perPage).Offset(offset).Find(&documents).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -158,6 +172,7 @@ func UploadDocument(c *fiber.Ctx) error {
 	client := s3.NewFromConfig(cfg)
 
 	// Generate a unique key for the file
+	fileNameDocument := c.FormValue("filename")
 	jenisDocumentStr := c.FormValue("jenis_document")
 	jenisDocumentUint64, err := strconv.ParseUint(jenisDocumentStr, 10, 32)
 	if err != nil {
@@ -283,7 +298,7 @@ func UploadDocument(c *fiber.Ctx) error {
 	// Save the document information in the database
 	document := models.Document{
 		UserID:          userId,
-		FileName:        fileName,
+		FileName:        fileNameDocument,
 		JenisDocumentID: jenisDocument,
 		URLFile:         fmt.Sprintf("%s/%s", os.Getenv("BASE_URL_R2"), fileKey),
 		Key:             fileKey,
@@ -364,6 +379,124 @@ func ShareDocument(c *fiber.Ctx) error {
 		if expires > 0 {
 			po.Expires = expires
 		}
+	}
+
+	presignedURL, err := presignClient.PresignGetObject(context.TODO(), presignParams, presignOpts)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate presigned URL"})
+	}
+
+	return c.JSON(fiber.Map{"url": presignedURL.URL})
+}
+
+func GetDocumentByID(c *fiber.Ctx) error {
+	id := c.Params("id")
+	userId := c.Locals("userId").(uuid.UUID)
+
+	var document models.Document
+	if err := database.DB.Preload("JenisDocument").First(&document, "id = ? AND user_id = ?", id, userId).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
+	}
+
+	document.URLFile = os.Getenv("PUBLIC_URL_R2") + "/" + document.Key
+
+	return c.JSON(document)
+}
+
+func DeleteDocument(c *fiber.Ctx) error {
+	id := c.Params("id")
+	userId := c.Locals("userId").(uuid.UUID)
+
+	var document models.Document
+	if err := database.DB.First(&document, "id = ? AND user_id = ?", id, userId).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
+	}
+
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+			os.Getenv("AWS_ACCESS_KEY_ID"),
+			os.Getenv("AWS_SECRET_ACCESS_KEY"),
+			"")),
+		config.WithRegion("us-east-1"), // Default region
+		config.WithEndpointResolver(aws.EndpointResolverFunc(
+			func(service, region string) (aws.Endpoint, error) {
+				return aws.Endpoint{
+					URL: os.Getenv("BASE_URL_R2"),
+				}, nil
+			})),
+	)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Failed to load AWS config",
+			"details": err.Error(),
+		})
+	}
+
+	client := s3.NewFromConfig(cfg)
+
+	// Delete the file from R2 Cloudflare
+	_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(os.Getenv("AWS_BUCKET_NAME")),
+		Key:    aws.String(document.Key),
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Failed to delete file from R2 Cloudflare",
+			"details": err.Error(),
+		})
+	}
+
+	// Delete the thumbnail from R2 Cloudflare
+	_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(os.Getenv("AWS_BUCKET_NAME")),
+		Key:    aws.String(document.ThumbnailURL),
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Failed to delete thumbnail from R2 Cloudflare",
+			"details": err.Error(),
+		})
+	}
+
+	// Hapus dokumen dari database
+	if err := database.DB.Delete(&models.Document{}, "id = ?", id).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete document from database"})
+	}
+
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func DownloadDocument(c *fiber.Ctx) error {
+	id := c.Params("id")
+	userId := c.Locals("userId").(uuid.UUID)
+
+	var document models.Document
+	if err := database.DB.First(&document, "id = ? AND user_id = ?", id, userId).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
+	}
+
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(os.Getenv("AWS_REGION")))
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load AWS configuration"})
+	}
+
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.EndpointResolver = s3.EndpointResolverFromURL(os.Getenv("BASE_URL_R2"))
+	})
+
+	presignClient := s3.NewPresignClient(client)
+	presignParams := &s3.GetObjectInput{
+		Bucket: aws.String(os.Getenv("AWS_BUCKET_NAME")),
+		Key:    aws.String(document.Key),
+	}
+
+	parsedDuration, err := time.ParseDuration("24h")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid time limit format"})
+	}
+
+	presignOpts := func(po *s3.PresignOptions) {
+		po.Expires = parsedDuration
 	}
 
 	presignedURL, err := presignClient.PresignGetObject(context.TODO(), presignParams, presignOpts)
